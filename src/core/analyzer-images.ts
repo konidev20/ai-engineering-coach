@@ -6,7 +6,7 @@
 /* Image Gallery analyzer -- extracts image usage moments from sessions */
 
 import { AnalyzerBase } from './analyzer-base';
-import { DateFilter, Session, SessionRequest } from './types';
+import { DateFilter, Session } from './types';
 import { toDateStr } from './helpers';
 
 /* ── Public types ─────────────────────────────────────────────── */
