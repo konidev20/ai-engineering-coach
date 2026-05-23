@@ -16,3 +16,9 @@ local/
 test_output.txt
 scripts/verify-counts.ts
 marketing/
+
+# CLI data directory (user-specific, not shared)
+.ai-engineer-coach/
+
+# CLI data directory (user-specific, not shared)
+.ai-engineer-coach/

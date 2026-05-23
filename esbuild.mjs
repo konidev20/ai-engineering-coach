@@ -57,6 +57,19 @@ const cacheWriteWorkerBuild = esbuild.build({
   external: ['vscode'],
 });
 
+// Bundle the CLI entry point (standalone mode)
+const cliBuild = esbuild.build({
+  entryPoints: ['src/cli/cli.ts'],
+  bundle: true,
+  platform: 'node',
+  target: 'es2022',
+  format: 'cjs',
+  outfile: 'dist/cli/cli.js',
+  sourcemap: true,
+  external: ['vscode'],
+  banner: { js: '#!/usr/bin/env node' },
+});
+
 // Bundle the webview script
 const webviewBuild = esbuild.build({
   entryPoints: ['src/webview/app.ts'],
@@ -68,7 +81,7 @@ const webviewBuild = esbuild.build({
   sourcemap: true,
 });
 
-await Promise.all([extensionBuild, workerBuild, parseWorkerBuild, cacheWriteWorkerBuild, webviewBuild]);
+await Promise.all([extensionBuild, workerBuild, parseWorkerBuild, cacheWriteWorkerBuild, cliBuild, webviewBuild]);
 
 // Copy static webview assets
 const webviewDist = 'dist/webview';
@@ -148,6 +161,17 @@ if (isWatch) {
     sourcemap: true,
     external: ['vscode'],
   });
+  const ctx6 = await esbuild.context({
+    entryPoints: ['src/cli/cli.ts'],
+    bundle: true,
+    platform: 'node',
+    target: 'es2022',
+    format: 'cjs',
+    outfile: 'dist/cli/cli.js',
+    sourcemap: true,
+    external: ['vscode'],
+    banner: { js: '#!/usr/bin/env node' },
+  });
   const ctx4 = await esbuild.context({
     entryPoints: ['src/webview/app.ts'],
     bundle: true,
@@ -157,6 +181,6 @@ if (isWatch) {
     outfile: 'dist/webview/app.js',
     sourcemap: true,
   });
-  await Promise.all([ctx1.watch(), ctx2.watch(), ctx3.watch(), ctx4.watch(), ctx5.watch()]);
+  await Promise.all([ctx1.watch(), ctx2.watch(), ctx3.watch(), ctx4.watch(), ctx5.watch(), ctx6.watch()]);
   console.log('Watching for changes...');
 }

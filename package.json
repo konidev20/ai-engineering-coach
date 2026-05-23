@@ -39,6 +39,9 @@
     "onCommand:aiEngineerCoach.reviewLocalRules",
     "onView:aiEngineerCoach.welcome"
   ],
+  "bin": {
+    "ai-coach": "./dist/cli/cli.js"
+  },
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -98,6 +101,8 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm run spellcheck && npm run knip && npm run test",
     "check-size": "node scripts/check-bundle-size.mjs",
+    "cli": "node dist/cli/cli.js",
+    "serve": "node dist/cli/cli.js serve",
     "test:e2e": "npx playwright test",
     "lockfile-lint": "lockfile-lint",
     "prepare": "husky"

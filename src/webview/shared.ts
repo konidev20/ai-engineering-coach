@@ -5,8 +5,18 @@
 
 /* Shared webview utilities -- RPC, DOM helpers, Chart.js setup */
 
+/* ---- Environment detection ---- */
+/* Detect whether we're running inside a VS Code webview or standalone browser.
+ * In VS Code, acquireVsCodeApi() is available. In standalone mode (CLI server),
+ * it is not, and we fall back to HTTP fetch() for RPC calls. */
+
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(s: unknown): void };
-export const vscode = acquireVsCodeApi();
+
+/** True when running inside a VS Code webview. */
+export const IS_VSCODE = typeof acquireVsCodeApi === 'function';
+
+/** VS Code API wrapper — only valid when IS_VSCODE is true. */
+export const vscode = IS_VSCODE ? acquireVsCodeApi() : null as unknown as ReturnType<typeof acquireVsCodeApi>;
 
 /* ---- RPC helper ---- */
 let rpcId = 0;
@@ -19,6 +29,9 @@ const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Err
  * Send a typed RPC call. Pass the expected result type as the generic, e.g.
  *   const stats = await rpc<StatsResult>('stats');
  * The return value is cast at the boundary.
+ *
+ * In VS Code mode: uses postMessage to the extension host.
+ * In standalone mode: uses HTTP POST to /api/{method}.
  */
 export function rpc<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -32,7 +45,28 @@ export function rpc<T = unknown>(method: string, params?: Record<string, unknown
       resolve: (v: unknown) => { clearTimeout(timer); resolve(v as T); },
       reject: (e: Error) => { clearTimeout(timer); reject(e); },
     });
-    vscode.postMessage({ type: 'request', id, method, params });
+
+    if (IS_VSCODE) {
+      /* VS Code mode: send via postMessage */
+      vscode.postMessage({ type: 'request', id, method, params });
+    } else {
+      /* Standalone mode: send via HTTP fetch */
+      fetch('/api/' + method, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params }),
+      })
+        .then(res => res.json())
+        .then(body => {
+          const result = body.data ?? body;
+          if (result && typeof result === 'object' && 'error' in result) {
+            reject(new Error(String((result as Record<string, unknown>).error)));
+          } else {
+            resolve(result);
+          }
+        })
+        .catch(err => reject(err));
+    }
   });
 }
 

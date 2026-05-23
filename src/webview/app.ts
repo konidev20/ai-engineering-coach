@@ -6,7 +6,7 @@
 /* Webview entry -- runs in the browser context inside the VS Code webview */
 
 import { AntiPatternData, DateFilter, StatsResult } from '../core/types';
-import { $, $$, rpc, destroyCharts, initMessageListener, withErrorBoundary } from './shared';
+import { $, $$, rpc, destroyCharts, initMessageListener, withErrorBoundary, IS_VSCODE } from './shared';
 import { html, render, unmount, ComponentChildren } from './render';
 import { renderDashboard } from './page-dashboard';
 import { renderPatterns } from './page-patterns';
@@ -446,6 +446,30 @@ function onDataReady(currentWorkspace: string): void {
 }
 
 initMessageListener(handleProgress, onDataReady);
+
+/* ---- Standalone mode: skip progress, initialize immediately ---- */
+/* When running outside VS Code (CLI server), there is no extension host
+ * sending progress messages. The server already has data parsed, so we
+ * can initialize the UI right away. */
+if (!IS_VSCODE) {
+  _dataIsReady = true;
+  void rpc<{ id: string; name: string; recent?: boolean; harnesses?: string[] }[]>('getWorkspaces').then((wss) => {
+    wsOptions = wss;
+    matchedWorkspaceId = wss[0]?.id;
+    updateToggleState();
+  }).catch(() => {});
+
+  void rpc<string[]>('getHarnesses').then((harnesses) => {
+    if (!harnessFilter) return;
+    harnessFilter.length = 1;
+    for (const h of harnesses) {
+      harnessFilter.add(new Option(h, h));
+    }
+  }).catch(() => {});
+
+  navigateTo(currentPage);
+  refreshNavBadges(currentFilter);
+}
 
 /* ---- Navigation ---- */
 document.addEventListener('click', (e) => {
