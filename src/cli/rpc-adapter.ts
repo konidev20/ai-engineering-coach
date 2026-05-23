@@ -19,7 +19,6 @@
 import { Analyzer } from '../core/analyzer';
 import { ParseResult } from '../core/parser';
 import { getRpcHandler } from '../webview/panel-rpc';
-import { RpcMethodName } from '../core/types';
 
 /**
  * Methods that require LLM access and are not available in CLI mode.
@@ -86,7 +85,7 @@ export async function handleRpcMethod(
   }
 
   // Get the handler for this method
-  const handler = getRpcHandler(method as RpcMethodName);
+  const handler = getRpcHandler(method);
   if (!handler) {
     return {
       error: `Unknown method: ${method}`,
@@ -95,12 +94,7 @@ export async function handleRpcMethod(
 
   // Call the handler
   try {
-    const result = handler(analyzer, parseResult, params);
-    // Handle async results
-    if (result && typeof (result as Promise<unknown>).then === 'function') {
-      return await result;
-    }
-    return result;
+    return await Promise.resolve(handler(analyzer, parseResult, params));
   } catch (err) {
     return {
       error: err instanceof Error ? err.message : String(err),

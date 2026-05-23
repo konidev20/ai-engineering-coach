@@ -10,13 +10,47 @@
  * In VS Code, acquireVsCodeApi() is available. In standalone mode (CLI server),
  * it is not, and we fall back to HTTP fetch() for RPC calls. */
 
-declare function acquireVsCodeApi(): { postMessage(msg: unknown): void; getState(): unknown; setState(s: unknown): void };
+interface WebviewStateApi {
+  postMessage(msg: unknown): void;
+  getState(): unknown;
+  setState(s: unknown): void;
+}
+
+declare function acquireVsCodeApi(): WebviewStateApi;
 
 /** True when running inside a VS Code webview. */
 export const IS_VSCODE = typeof acquireVsCodeApi === 'function';
 
-/** VS Code API wrapper — only valid when IS_VSCODE is true. */
-export const vscode = IS_VSCODE ? acquireVsCodeApi() : null as unknown as ReturnType<typeof acquireVsCodeApi>;
+let standaloneState: unknown = {};
+
+function readStandaloneState(): unknown {
+  try {
+    const raw = window.localStorage?.getItem('ai-engineer-coach-state');
+    return raw ? JSON.parse(raw) : standaloneState;
+  } catch {
+    return standaloneState;
+  }
+}
+
+function writeStandaloneState(state: unknown): void {
+  standaloneState = state;
+  try {
+    window.localStorage?.setItem('ai-engineer-coach-state', JSON.stringify(state));
+  } catch {
+    // localStorage may be disabled; in-memory state still works for this tab.
+  }
+}
+
+/** VS Code-compatible API wrapper. Standalone mode gets a local shim. */
+export const vscode: WebviewStateApi = IS_VSCODE ? acquireVsCodeApi() : {
+  postMessage: () => { /* standalone uses fetch RPC */ },
+  getState: readStandaloneState,
+  setState: writeStandaloneState,
+};
+
+if (!IS_VSCODE) {
+  (window as unknown as { __AI_ENGINEER_COACH_STANDALONE_SHIM__?: string }).__AI_ENGINEER_COACH_STANDALONE_SHIM__ = 'vscode-state-shim-v1';
+}
 
 /* ---- RPC helper ---- */
 let rpcId = 0;
@@ -34,6 +68,49 @@ const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Err
  * In standalone mode: uses HTTP POST to /api/{method}.
  */
 export function rpc<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+  if (!IS_VSCODE) {
+    const timeoutMs = LLM_METHODS.has(method) ? RPC_LLM_TIMEOUT_MS : RPC_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+
+    return fetch('/api/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ params }),
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        let body: unknown;
+        try {
+          body = await res.json();
+        } catch {
+          body = undefined;
+        }
+
+        if (!res.ok) {
+          const message = body && typeof body === 'object' && 'error' in body
+            ? String((body as Record<string, unknown>).error)
+            : `HTTP ${res.status}`;
+          throw new Error(message);
+        }
+
+        const result = body && typeof body === 'object' && 'data' in body
+          ? (body as Record<string, unknown>).data
+          : body;
+        if (result && typeof result === 'object' && 'error' in result) {
+          throw new Error(String((result as Record<string, unknown>).error));
+        }
+        return result as T;
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          throw new Error(`RPC timeout: ${method}`);
+        }
+        throw err;
+      })
+      .finally(() => window.clearTimeout(timer));
+  }
+
   return new Promise((resolve, reject) => {
     const id = String(++rpcId);
     const timeoutMs = LLM_METHODS.has(method) ? RPC_LLM_TIMEOUT_MS : RPC_TIMEOUT_MS;
@@ -46,27 +123,8 @@ export function rpc<T = unknown>(method: string, params?: Record<string, unknown
       reject: (e: Error) => { clearTimeout(timer); reject(e); },
     });
 
-    if (IS_VSCODE) {
-      /* VS Code mode: send via postMessage */
-      vscode.postMessage({ type: 'request', id, method, params });
-    } else {
-      /* Standalone mode: send via HTTP fetch */
-      fetch('/api/' + method, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ params }),
-      })
-        .then(res => res.json())
-        .then(body => {
-          const result = body.data ?? body;
-          if (result && typeof result === 'object' && 'error' in result) {
-            reject(new Error(String((result as Record<string, unknown>).error)));
-          } else {
-            resolve(result);
-          }
-        })
-        .catch(err => reject(err));
-    }
+    /* VS Code mode: send via postMessage */
+    vscode.postMessage({ type: 'request', id, method, params });
   });
 }
 

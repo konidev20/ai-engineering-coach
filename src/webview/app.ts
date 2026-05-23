@@ -445,32 +445,6 @@ function onDataReady(currentWorkspace: string): void {
   refreshNavBadges(currentFilter);
 }
 
-initMessageListener(handleProgress, onDataReady);
-
-/* ---- Standalone mode: skip progress, initialize immediately ---- */
-/* When running outside VS Code (CLI server), there is no extension host
- * sending progress messages. The server already has data parsed, so we
- * can initialize the UI right away. */
-if (!IS_VSCODE) {
-  _dataIsReady = true;
-  void rpc<{ id: string; name: string; recent?: boolean; harnesses?: string[] }[]>('getWorkspaces').then((wss) => {
-    wsOptions = wss;
-    matchedWorkspaceId = wss[0]?.id;
-    updateToggleState();
-  }).catch(() => {});
-
-  void rpc<string[]>('getHarnesses').then((harnesses) => {
-    if (!harnessFilter) return;
-    harnessFilter.length = 1;
-    for (const h of harnesses) {
-      harnessFilter.add(new Option(h, h));
-    }
-  }).catch(() => {});
-
-  navigateTo(currentPage);
-  refreshNavBadges(currentFilter);
-}
-
 /* ---- Navigation ---- */
 document.addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
@@ -678,3 +652,10 @@ function renderPage(page: string): void {
 }
 
 /* ---- Init ---- */
+initMessageListener(handleProgress, onDataReady);
+
+/* Standalone mode: the CLI server parses data before serving the app, so
+ * initialize through the same data-ready path after all controls exist. */
+if (!IS_VSCODE) {
+  onDataReady('');
+}

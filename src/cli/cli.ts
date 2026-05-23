@@ -25,6 +25,7 @@ import { loadAllRuleLayersAsync } from '../core/rule-loader';
 interface CliArgs {
   command: string;
   port: number;
+  host: string;
   workspaceRoot?: string;
 }
 
@@ -32,6 +33,7 @@ function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     command: 'help',
     port: 3000,
+    host: '127.0.0.1',
   };
 
   // Skip node and script path
@@ -51,7 +53,10 @@ function parseArgs(argv: string[]): CliArgs {
   // Parse flags
   for (let i = 1; i < raw.length; i++) {
     if (raw[i] === '--port' && raw[i + 1]) {
-      args.port = parseInt(raw[i + 1], 10);
+      args.port = Number.parseInt(raw[i + 1], 10);
+      i++;
+    } else if (raw[i] === '--host' && raw[i + 1]) {
+      args.host = raw[i + 1];
       i++;
     } else if (raw[i] === '--workspace' && raw[i + 1]) {
       args.workspaceRoot = raw[i + 1];
@@ -75,6 +80,7 @@ Usage:
 Options:
   --workspace <path>   Workspace root for project-level rules (optional)
   --port <number>      Port for the HTTP server (default: 3000)
+  --host <host>         Host for the HTTP server (default: 127.0.0.1)
 
 Examples:
   ai-coach analyze > analysis.json
@@ -126,6 +132,7 @@ async function main(): Promise<void> {
       // Start the HTTP server
       await startServer({
         port: args.port,
+        host: args.host,
         workspaceRoot: args.workspaceRoot,
       });
       break;

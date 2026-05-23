@@ -15,7 +15,7 @@
  *   console.log(JSON.stringify(result, null, 2));
  */
 
-import { findLogsDirs, parseAllLogs, ParseResult } from '../core/parser';
+import { findLogsDirs, parseAllLogs, ParseResult, collectExternalHarnessesSync } from '../core/parser';
 import { Analyzer } from '../core/analyzer';
 import { runtimeDebug } from '../core/runtime-debug';
 
@@ -50,7 +50,7 @@ export interface AnalysisOutput {
  * @param workspaceRoot - Optional workspace root for project-level rules
  * @returns Complete analysis output ready for JSON serialization
  */
-export async function runAnalysis(workspaceRoot?: string): Promise<AnalysisOutput> {
+export async function runAnalysis(_workspaceRoot?: string): Promise<AnalysisOutput> {
   const t0 = Date.now();
 
   // Step 1: Discover log directories
@@ -58,18 +58,25 @@ export async function runAnalysis(workspaceRoot?: string): Promise<AnalysisOutpu
   const dirs = findLogsDirs();
   runtimeDebug('cli', 'logs-dirs-found', `count=${dirs.length}`);
 
-  if (dirs.length === 0) {
+  // Step 2: Parse all logs (may be empty if no VS Code/Xcode logs)
+  runtimeDebug('cli', 'parseAllLogs');
+  const parseResult: ParseResult = dirs.length > 0
+    ? parseAllLogs(dirs)
+    : { sessions: [], workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+  const parseTimeMs = Date.now() - t0;
+
+  // Step 2b: Collect external harness sessions (Claude, Codex, OpenCode)
+  // These are independent of VS Code logs and may be the only data source.
+  runtimeDebug('cli', 'collectExternalHarnesses');
+  collectExternalHarnessesSync(parseResult.workspaces, parseResult.sessions);
+
+  if (parseResult.sessions.length === 0) {
     throw new Error(
-      'No AI session log directories found.\n' +
+      'No AI session logs found.\n' +
       'Make sure you have used Copilot, Claude Code, Codex, or OpenCode.\n' +
       'Logs are searched in standard locations for each harness.'
     );
   }
-
-  // Step 2: Parse all logs
-  runtimeDebug('cli', 'parseAllLogs');
-  const parseResult = parseAllLogs(dirs);
-  const parseTimeMs = Date.now() - t0;
 
   runtimeDebug('cli', 'parse-complete',
     `sessions=${parseResult.sessions.length} workspaces=${parseResult.workspaces.size}`

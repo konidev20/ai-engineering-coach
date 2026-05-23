@@ -89,6 +89,45 @@ body {
   </nav>
   <main id="content"></main>
 </div>
+<script>
+(function () {
+  if (!String.prototype.replaceAll) {
+    String.prototype.replaceAll = function (search, replacement) {
+      var target = String(this);
+      if (search instanceof RegExp) {
+        if (!search.global) throw new TypeError('replaceAll with a non-global RegExp');
+        return target.replace(search, replacement);
+      }
+      return target.split(String(search)).join(String(replacement));
+    };
+  }
+  if (!Promise.allSettled) {
+    Promise.allSettled = function (promises) {
+      return Promise.all(Array.prototype.map.call(promises, function (promise) {
+        return Promise.resolve(promise).then(function (value) {
+          return { status: 'fulfilled', value: value };
+        }, function (reason) {
+          return { status: 'rejected', reason: reason };
+        });
+      }));
+    };
+  }
+  function showStartupError(message) {
+    var content = document.getElementById('content');
+    if (!content) return;
+    content.innerHTML = '<div class="error-boundary"><h3>Dashboard startup error</h3><p class="error-message"></p><p class="error-hint">Open browser devtools for the full console error.</p></div>';
+    var target = content.querySelector('.error-message');
+    if (target) target.textContent = message;
+  }
+  window.addEventListener('error', function (event) {
+    showStartupError(event.message || 'Unknown script error');
+  });
+  window.addEventListener('unhandledrejection', function (event) {
+    var reason = event.reason;
+    showStartupError(reason && reason.message ? reason.message : String(reason));
+  });
+}());
+</script>
 <script src="/app.js"></script>
 </body>
 </html>`;

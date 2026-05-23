@@ -204,18 +204,18 @@ export class DashboardPanel {
 
       const dirs = findLogsDirs();
       runtimeDebug('panel', 'logs-dirs-found', `count=${dirs.length}`);
-      if (dirs.length === 0) {
-        runtimeDebug('panel', 'loadData-no-dirs');
-        if (!this.disposed) {
-          try { this.panel.webview.html = getErrorHtml('No Copilot chat log directories found.'); } catch { /* disposed */ }
-        }
-        return;
-      }
 
       this.parseResult = await parseAllLogsViaWorker(dirs, progress => sendProgress(progress));
       if (this.disposed) return;
       runtimeDebug('panel', 'parse-complete', `sessions=${this.parseResult.sessions.length} workspaces=${this.parseResult.workspaces.size}`);
       const sessionCount = this.parseResult.sessions.length;
+      if (sessionCount === 0) {
+        runtimeDebug('panel', 'loadData-no-sessions');
+        if (!this.disposed) {
+          try { this.panel.webview.html = getErrorHtml('No AI session logs found.'); } catch { /* disposed */ }
+        }
+        return;
+      }
 
       sendProgress({ phase: 4, detail: 'Building analyzer', pct: 90, sessions: sessionCount });
       await flush();

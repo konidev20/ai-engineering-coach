@@ -53,6 +53,22 @@ export function getProjectRulesDir(workspaceRoot: string): string {
 
 let builtinRegistered = false;
 
+function getBuiltinRulesDirs(): string[] {
+  return [
+    path.join(__dirname, 'rules'),
+    path.join(__dirname, '..', 'rules'),
+    path.join(__dirname, '..', 'src', 'core', 'rules'),
+  ];
+}
+
+function getBuiltinMetricsDirs(): string[] {
+  return [
+    path.join(__dirname, 'metrics'),
+    path.join(__dirname, '..', 'metrics'),
+    path.join(__dirname, '..', 'src', 'core', 'metrics'),
+  ];
+}
+
 /**
  * Load all .md files from the built-in rules/ directory and register them.
  * Safe to call multiple times (only loads once).
@@ -61,31 +77,20 @@ export function registerAllBuiltinRules(): void {
   if (builtinRegistered) return;
   builtinRegistered = true;
 
-  const rulesDir = path.join(__dirname, 'rules');
-  let files: string[];
-  try {
-    files = fs.readdirSync(rulesDir).filter(f => f.endsWith('.md'));
-  } catch {
-    const srcRulesDir = path.join(__dirname, '..', 'src', 'core', 'rules');
+  for (const rulesDir of getBuiltinRulesDirs()) {
     try {
-      files = fs.readdirSync(srcRulesDir).filter(f => f.endsWith('.md'));
+      const files = fs.readdirSync(rulesDir).filter(f => f.endsWith('.md'));
       for (const file of files) {
         const id = file.replace(/\.md$/, '');
-        const source = fs.readFileSync(path.join(srcRulesDir, file), 'utf-8');
+        const source = fs.readFileSync(path.join(rulesDir, file), 'utf-8');
         registerBuiltinRuleSource(id, source);
       }
       return;
     } catch {
-      warnCore('RuleLoader', 'Could not find rules directory');
-      return;
+      // Try the next known build/source location.
     }
   }
-
-  for (const file of files) {
-    const id = file.replace(/\.md$/, '');
-    const source = fs.readFileSync(path.join(rulesDir, file), 'utf-8');
-    registerBuiltinRuleSource(id, source);
-  }
+  warnCore('RuleLoader', 'Could not find rules directory');
 }
 
 /**
@@ -177,7 +182,6 @@ export interface RuleLayerInfo {
  * Get info about all rule layers, useful for the UI help panel.
  */
 export function getRuleLayerInfo(workspaceRoot?: string): RuleLayerInfo[] {
-  const builtinDir = path.join(__dirname, 'rules');
   const personalDir = getPersonalRulesDir();
   const projectDir = workspaceRoot ? getProjectRulesDir(workspaceRoot) : '';
 
@@ -190,6 +194,9 @@ export function getRuleLayerInfo(workspaceRoot?: string): RuleLayerInfo[] {
     }
   }
 
+  const builtinCandidates = getBuiltinRulesDirs().map(dir => ({ dir, info: countMdFiles(dir) }));
+  const builtin = builtinCandidates.find(candidate => candidate.info.exists) ?? builtinCandidates[0];
+  const builtinDir = builtin.dir;
   const b = countMdFiles(builtinDir);
   const p = countMdFiles(personalDir);
   const pr = projectDir ? countMdFiles(projectDir) : { exists: false, count: 0 };
@@ -217,13 +224,7 @@ export function registerAllBuiltinMetrics(): number {
   if (builtinMetricsRegistered) return 0;
   builtinMetricsRegistered = true;
 
-  // Try dist/metrics/ first, then src/core/metrics/
-  const dirs = [
-    path.join(__dirname, 'metrics'),
-    path.join(__dirname, '..', 'src', 'core', 'metrics'),
-  ];
-
-  for (const dir of dirs) {
+  for (const dir of getBuiltinMetricsDirs()) {
     const count = loadMetricsFromDir(dir, 'built-in');
     if (count > 0) return count;
   }
@@ -299,31 +300,24 @@ export async function registerAllBuiltinRulesAsync(): Promise<void> {
   if (builtinRegistered) return;
   builtinRegistered = true;
 
-  const rulesDir = path.join(__dirname, 'rules');
-  let files: string[];
-  let baseDir = rulesDir;
-  try {
-    files = (await fsp.readdir(rulesDir)).filter(f => f.endsWith('.md'));
-  } catch {
-    const srcRulesDir = path.join(__dirname, '..', 'src', 'core', 'rules');
+  for (const rulesDir of getBuiltinRulesDirs()) {
     try {
-      files = (await fsp.readdir(srcRulesDir)).filter(f => f.endsWith('.md'));
-      baseDir = srcRulesDir;
-    } catch {
-      warnCore('RuleLoader', 'Could not find rules directory');
+      const files = (await fsp.readdir(rulesDir)).filter(f => f.endsWith('.md'));
+      await Promise.all(files.map(async file => {
+        const id = file.replace(/\.md$/, '');
+        try {
+          const source = await fsp.readFile(path.join(rulesDir, file), 'utf-8');
+          registerBuiltinRuleSource(id, source);
+        } catch {
+          warnCore('RuleLoader', `Failed to read ${path.join(rulesDir, file)}`);
+        }
+      }));
       return;
+    } catch {
+      // Try the next known build/source location.
     }
   }
-
-  await Promise.all(files.map(async file => {
-    const id = file.replace(/\.md$/, '');
-    try {
-      const source = await fsp.readFile(path.join(baseDir, file), 'utf-8');
-      registerBuiltinRuleSource(id, source);
-    } catch {
-      warnCore('RuleLoader', `Failed to read ${path.join(baseDir, file)}`);
-    }
-  }));
+  warnCore('RuleLoader', 'Could not find rules directory');
 }
 
 async function loadRulesFromDirAsync(
@@ -389,12 +383,7 @@ export async function registerAllBuiltinMetricsAsync(): Promise<number> {
   if (builtinMetricsRegistered) return 0;
   builtinMetricsRegistered = true;
 
-  const dirs = [
-    path.join(__dirname, 'metrics'),
-    path.join(__dirname, '..', 'src', 'core', 'metrics'),
-  ];
-
-  for (const dir of dirs) {
+  for (const dir of getBuiltinMetricsDirs()) {
     const count = await loadMetricsFromDirAsync(dir, 'built-in');
     if (count > 0) return count;
   }

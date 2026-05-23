@@ -21,16 +21,18 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Analyzer } from '../core/analyzer';
-import { findLogsDirs, parseAllLogs, ParseResult } from '../core/parser';
+import { collectExternalHarnessesSync, findLogsDirs, parseAllLogs, ParseResult } from '../core/parser';
 import { handleRpcMethod } from './rpc-adapter';
 import { getStandaloneHtml, getErrorHtml } from './server-html';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
-import { runtimeDebug } from '../core/runtime-debug';
+import { FileStore } from './store';
 
 /** Server configuration options. */
 export interface ServerOptions {
   /** Port to listen on (default: 3000) */
   port: number;
+  /** Host to bind (default: 127.0.0.1) */
+  host?: string;
   /** Workspace root for project-level rules */
   workspaceRoot?: string;
 }
@@ -39,6 +41,7 @@ export interface ServerOptions {
 interface ServerState {
   analyzer: Analyzer;
   parseResult: ParseResult;
+  store: FileStore;
 }
 
 /**
@@ -52,20 +55,24 @@ interface ServerState {
  */
 export async function startServer(options: ServerOptions): Promise<void> {
   const port = options.port || 3000;
+  const host = options.host || '127.0.0.1';
 
   // Step 1: Discover log directories
   console.log('Discovering session logs...');
   const dirs = findLogsDirs();
-  if (dirs.length === 0) {
-    console.error('No AI session log directories found.');
-    console.error('Make sure you have used Copilot, Claude Code, Codex, or OpenCode.');
-    process.exit(1);
-  }
   console.log(`Found ${dirs.length} log directories.`);
 
   // Step 2: Parse all logs
   console.log('Parsing session logs...');
-  const parseResult = parseAllLogs(dirs);
+  const parseResult: ParseResult = dirs.length > 0
+    ? parseAllLogs(dirs)
+    : { sessions: [], workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+  collectExternalHarnessesSync(parseResult.workspaces, parseResult.sessions);
+  if (parseResult.sessions.length === 0) {
+    console.error('No AI session logs found.');
+    console.error('Make sure you have used Copilot, Claude Code, Codex, or OpenCode.');
+    process.exit(1);
+  }
   console.log(`Parsed ${parseResult.sessions.length} sessions across ${parseResult.workspaces.size} workspaces.`);
 
   // Step 3: Build analyzer
@@ -76,14 +83,22 @@ export async function startServer(options: ServerOptions): Promise<void> {
     parseResult.workspaces
   );
 
-  const state: ServerState = { analyzer, parseResult };
+  const state: ServerState = { analyzer, parseResult, store: new FileStore() };
 
   // Step 4: Create and start HTTP server
   const server = createServer(state);
 
-  server.listen(port, () => {
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    const detail = err.code === 'EADDRINUSE'
+      ? `Port ${port} is already in use. Try --port with a different number.`
+      : err.message;
+    console.error(`Failed to start server: ${detail}`);
+    process.exit(1);
+  });
+
+  server.listen(port, host, () => {
     console.log(`\nAI Engineer Coach dashboard running at:`);
-    console.log(`  http://localhost:${port}`);
+    console.log(`  http://${host}:${port}`);
     console.log(`\nPress Ctrl+C to stop.`);
   });
 }
@@ -117,19 +132,22 @@ function createServer(state: ServerState): http.Server {
 
       // Route: Webview bundle (app.js)
       if (pathname === '/app.js') {
-        serveFile(res, path.join(__dirname, '..', 'webview', 'app.js'), 'application/javascript');
+        serveFile(res, path.join(__dirname, '..', 'webview', 'app.js'), 'application/javascript', false);
         return;
       }
 
       // Route: CSS bundle
       if (pathname === '/styles.css') {
-        serveFile(res, path.join(__dirname, '..', 'webview', 'styles.css'), 'text/css');
+        serveFile(res, path.join(__dirname, '..', 'webview', 'styles.css'), 'text/css', false);
         return;
       }
 
       // Route: Dashboard HTML (default)
       if (pathname === '/' || pathname === '/index.html') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-cache',
+        });
         res.end(getStandaloneHtml({
           tokenReportingEnabled: FF_TOKEN_REPORTING_ENABLED,
         }));
@@ -193,6 +211,26 @@ async function handleApiRequest(
     return;
   }
 
+  if (method === 'loadModelBudgets') {
+    const budgets = state.store.get<Record<string, number>>('modelBudgets', {});
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache',
+    });
+    res.end(JSON.stringify({ data: budgets }));
+    return;
+  }
+
+  if (method === 'saveModelBudgets') {
+    await state.store.update('modelBudgets', params.budgets ?? {});
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache',
+    });
+    res.end(JSON.stringify({ data: { ok: true } }));
+    return;
+  }
+
   // Call the RPC handler
   const result = await handleRpcMethod(
     method,
@@ -224,12 +262,12 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
 /**
  * Serve a file with the given MIME type.
  */
-function serveFile(res: http.ServerResponse, filePath: string, mimeType: string): void {
+function serveFile(res: http.ServerResponse, filePath: string, mimeType: string, cache = true): void {
   try {
     const content = fs.readFileSync(filePath);
     res.writeHead(200, {
       'Content-Type': mimeType,
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': cache ? 'public, max-age=3600' : 'no-cache',
     });
     res.end(content);
   } catch {

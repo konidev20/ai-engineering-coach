@@ -18,7 +18,7 @@ import { collectExternalHarnessesAsync, collectExternalHarnessesSync, EXTERNAL_H
 import { warnCore } from './log';
 
 export type { ParseResult };
-export { clearCache };
+export { clearCache, collectExternalHarnessesSync };
 
 export interface LoadProgress {
   phase: number;
