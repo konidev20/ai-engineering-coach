@@ -6,6 +6,7 @@
 /* LLM schemas and request helpers for the dashboard panel. */
 
 import * as vscode from 'vscode';
+import { runtimeDebug } from '../core/runtime-debug';
 
 export interface JsonSchemaSpec {
   name: string;
@@ -136,10 +137,10 @@ export const SCHEMA_TRIAGE: JsonSchemaSpec = {
         items: {
           type: 'object',
           properties: {
-            id: { type: 'string' },
-            verdict: { type: 'string', enum: ['strong', 'maybe', 'skip'] },
-            reason: { type: 'string' },
-            suggestedSkillName: { type: ['string', 'null'] },
+            id: { type: 'string', description: 'The cluster id this verdict refers to, copied from the input.' },
+            verdict: { type: 'string', enum: ['strong', 'maybe', 'skip'], description: 'Whether the cluster is a strong, maybe, or skip candidate for a skill file.' },
+            reason: { type: 'string', description: 'One sentence explaining the verdict.' },
+            suggestedSkillName: { type: 'string', description: 'Short kebab-case skill name, or an empty string when no skill is suggested.' },
           },
           required: ['id', 'verdict', 'reason', 'suggestedSkillName'],
           additionalProperties: false,
@@ -277,30 +278,46 @@ function parseLlmJson<T>(text: string): T {
 
   try { return JSON.parse(fixed) as T; } catch { /* fall through */ }
 
-  // Attempt 3: balance unmatched brackets
-  const opens = (fixed.match(/[{[]/g) || []).length;
-  const closes = (fixed.match(/[}\]]/g) || []).length;
-  for (let i = 0; i < opens - closes; i++) {
-    const lastOpen = Math.max(fixed.lastIndexOf('{'), fixed.lastIndexOf('['));
-    fixed += fixed[lastOpen] === '{' ? '}' : ']';
-  }
-
-  try { return JSON.parse(fixed) as T; } catch { /* fall through */ }
-
-  // Attempt 4: truncate to last complete object in an array
-  const lastCompleteA = fixed.lastIndexOf('}]');
-  const lastCompleteB = fixed.lastIndexOf('},');
-  const lastComplete = Math.max(lastCompleteA, lastCompleteB);
-  if (lastComplete > 0) {
-    const truncated = fixed.slice(0, lastComplete + 1) + ']';
-    try { return JSON.parse(truncated) as T; } catch { /* fall through */ }
-  }
+  // Attempt 3: close a truncated response by balancing unclosed strings and
+  // brackets in the correct order, then dropping any dangling trailing comma.
+  const balanced = balanceTruncatedJson(fixed).replaceAll(/,(\s*[}\]])/g, '$1');
+  try { return JSON.parse(balanced) as T; } catch { /* fall through */ }
 
   throw new Error('Failed to parse JSON from LLM response');
 }
 
+/**
+ * Repair JSON that was cut off mid-stream (e.g. when the model hit its output
+ * token limit). Walks the text tracking string state and a stack of open
+ * brackets, then appends the closers needed to make it parseable. Works for
+ * both array-root and object-wrapped payloads.
+ */
+function balanceTruncatedJson(input: string): string {
+  const closers: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (const char of input) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '{') closers.push('}');
+    else if (char === '[') closers.push(']');
+    else if (char === '}' || char === ']') closers.pop();
+  }
+
+  let result = input;
+  if (inString) result += '"';
+  for (let i = closers.length - 1; i >= 0; i--) result += closers[i];
+  return result;
+}
+
 const LLM_MAX_RETRIES = 2;
-const LLM_FAMILY = 'gpt-4.1';
+const LLM_FAMILY = 'gpt-5.4-mini';
 /** Hard cap for a single LLM streaming request (ms). Prevents the UI from
  *  spinning forever when the model hangs or the user never grants consent. */
 const LLM_REQUEST_TIMEOUT_MS = 90_000;
@@ -311,7 +328,7 @@ const LLM_REQUEST_TIMEOUT_MS = 90_000;
  * nothing is available so callers can surface a useful message.
  */
 async function selectModel(): Promise<vscode.LanguageModelChat> {
-  const families = [LLM_FAMILY, 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4'];
+  const families = [LLM_FAMILY, 'gpt-5-mini', 'gpt-4.1-mini', 'gpt-4.1'];
   for (const family of families) {
     const models = await vscode.lm.selectChatModels({ family });
     if (models.length > 0) return models[0];
@@ -370,9 +387,9 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
 
   for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
     const cts = new vscode.CancellationTokenSource();
+    let text = '';
     try {
       const response = await model.sendRequest(retryMessages, options, cts.token);
-      let text = '';
       for await (const chunk of response.text) text += chunk;
       try {
         return JSON.parse(text.trim()) as T;
@@ -381,9 +398,16 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
       }
     } catch (err) {
       lastError = err;
+      const schemaName = jsonSchema?.name ?? 'none';
+      const preview = text.length > 400 ? `${text.slice(0, 200)} … ${text.slice(-200)}` : text;
+      runtimeDebug('panel-llm', 'call-failed',
+        `schema=${schemaName} attempt=${attempt + 1} structured=${options.modelOptions !== undefined} ` +
+        `model=${model.id} textLen=${text.length} error=${err instanceof Error ? err.message : String(err)} ` +
+        `text=${JSON.stringify(preview)}`);
       if (err instanceof vscode.CancellationError) { cts.dispose(); throw err; }
-      // If structured output isn't supported, fall back to plain mode
-      if (attempt === 0 && jsonSchema && lastError instanceof Error && /response_format|modelOptions|not supported/i.test(lastError.message)) {
+      // Drop structured output so later attempts can recover in plain mode.
+      if (jsonSchema && options.modelOptions && lastError instanceof Error &&
+          /response_format|modelOptions|not supported|JSON|parse/i.test(lastError.message)) {
         options.modelOptions = undefined;
       }
       // On parse failures, nudge the model to return valid JSON on the next attempt
